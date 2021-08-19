@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ******************************************************************
  ALTERNATING BIT AND GO-BACK-N NETWORK EMULATOR: VERSION 1.1  J.F.Kurose
@@ -17,12 +18,27 @@
 #define BIDIRECTIONAL 0 /* change to 1 if you're doing extra credit */
                         /* and write a routine called B_output */
 
+/* possible events: */
+#define TIMER_INTERRUPT 0
+#define FROM_LAYER5 1
+#define FROM_LAYER3 2
+
+#define OFF 0
+#define ON 1
+#define A 0
+#define B 1
+
+#define WINDOWSIZE 20
+#define MSGSIZE 20
+#define TIMEOUT 500
+#define ACK "ACK"
+
 /* a "msg" is the data unit passed from layer 5 (teachers code) to layer  */
 /* 4 (students' code).  It contains the data (characters) to be delivered */
 /* to layer 5 via the students transport level protocol entities.         */
 struct msg
 {
-    char data[20];
+    char data[MSGSIZE];
 };
 
 /* a packet is the data unit passed from layer 4 (students code) to layer */
@@ -33,57 +49,344 @@ struct pkt
     int seqnum;
     int acknum;
     int checksum;
-    char payload[20];
+    char payload[MSGSIZE];
 };
 
-/********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
+/*** START Charles Hooper's Code ***/
 
-/* called from layer 5, passed the data to be sent to other side */
-A_output(message) struct msg message;
+/* The sliding window is implemented as a linked list with pointers to the
+ * base of the window as well as the end (referred to as `base` and
+ * `nextseqnum` in our textbooks) */
+struct windowElement
 {
+    struct pkt *packet;
+    struct windowElement *next;
+};
+
+struct windowElement *A_windowBase;
+struct windowElement *A_windowEnd;
+struct windowElement *B_windowBase;
+struct windowElement *B_windowEnd;
+
+// Let's store last acks received
+struct pkt *A_last_ack;
+struct pkt *B_last_ack;
+
+// Get highest unused seqnum. start is ptr to where in window to start search
+int get_next_seqnum(struct windowElement *start)
+{
+    int seqnum = 0;
+
+    while (start)
+    {
+        seqnum = start->packet->seqnum + 1;
+        start = start->next;
+    }
+
+    return seqnum;
 }
 
-B_output(message) /* need be completed only for extra credit */
-    struct msg message;
+// Return the size of the window in # of packets
+int windowlen(int AorB)
 {
-    printf("[B] Received message:\n");
-    for (int i = 0; i < 20; i++)
-        printf("%c", message.data[i]);
-    printf("\n");
+    struct windowElement *start, *end;
+    int sz = 0;
+
+    if (AorB == A)
+    {
+        start = A_windowBase;
+        end = A_windowEnd;
+    }
+    else if (AorB == B)
+    {
+        start = B_windowBase;
+        end = B_windowEnd;
+    }
+    else
+    {
+        printf("Invalid window target!\n");
+        return -1;
+    }
+
+    while (start && start->packet->seqnum <= end->packet->seqnum)
+    {
+        sz++;
+        start = start->next;
+    }
+    return sz;
 }
 
-/* called from layer 3, when a packet arrives for layer 4 */
-A_input(packet) struct pkt packet;
+// Checksum is calculated as the sum of the fields (seqnum, acknum, data)
+int calc_checksum(struct pkt *tgt_pkt)
 {
+    int checksum = 0;
+    checksum += tgt_pkt->seqnum;
+    checksum += tgt_pkt->acknum;
+    for (int i = 0; i < sizeof(tgt_pkt->payload) / sizeof(char); i++)
+        checksum += tgt_pkt->payload[i];
+    return checksum;
 }
 
-/* called when A's timer goes off */
-A_timerinterrupt()
+// Function that returns bool describing if a given packet's checksum is valid
+int pkt_checksum_valid(struct pkt *tgt_pkt)
 {
+    int expectedChecksum = calc_checksum(tgt_pkt);
+    return (expectedChecksum == tgt_pkt->checksum);
 }
 
-/* the following routine will be called once (only) before any other */
-/* entity A routines are called. You can use it to do any initialization */
-A_init()
+// Returns a pointer to a newly initialized packet
+struct pkt *make_pkt(int seqnum, char data[MSGSIZE])
 {
+    // init/copy data into fields
+    struct pkt *gen_pkt = (struct pkt *)malloc(sizeof(struct pkt));
+    gen_pkt->seqnum = seqnum;
+    gen_pkt->acknum = 0;
+
+    // copy payload into packet
+    for (int i = 0; i < sizeof(gen_pkt->payload) / sizeof(char); i++)
+    {
+        gen_pkt->payload[i] = data[i];
+    }
+
+    // calculate checksum
+    gen_pkt->checksum = calc_checksum(gen_pkt);
+    return gen_pkt;
 }
 
-/* Note that with simplex transfer from A-to-B, there is no B_output() */
-
-/* called from layer 3, when a packet arrives for layer 4 at B*/
-B_input(packet) struct pkt packet;
+// Sends an ACK by `caller` in response to `pkt_to_ack`
+void send_ack(int caller, struct pkt *pkt_to_ack)
 {
+    int seqnum = pkt_to_ack->seqnum;
+    char msg[MSGSIZE] = {'A', 'C', 'K', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    // Build packet
+    struct pkt *ack_pkt = make_pkt(seqnum, msg);
+    ack_pkt->acknum = pkt_to_ack->seqnum;
+
+    // We modified the packet so recalc checksum
+    ack_pkt->checksum = calc_checksum(ack_pkt);
+
+    // Send
+    tolayer3(caller, *ack_pkt);
 }
 
-/* called when B's timer goes off */
-B_timerinterrupt()
+// Sends `pkt_to_send` by `caller` and starts timer for detecting timeouts
+void send_pkt(int caller, struct pkt *pkt_to_send)
 {
+    tolayer3(caller, *pkt_to_send);
+    starttimer(caller, TIMEOUT);
 }
 
-/* the following rouytine will be called once (only) before any other */
-/* entity B routines are called. You can use it to do any initialization */
-B_init()
+// Transport layer interface called by the app layer ("layer 5")
+void A_output(struct msg message)
 {
+    printf("CCH> A_output> Got message from app layer, sending packet\n");
+    struct pkt *out_pkt;
+    struct windowElement *newElement, *flushElement;
+    int seqnum;
+
+    // Build packet: Seqnum is "nextseqnum" or zero
+    seqnum = get_next_seqnum(A_windowEnd);
+    //seqnum = A_windowEnd ? (A_windowEnd->packet->seqnum + 1) : 0;
+    out_pkt = make_pkt(seqnum, message.data);
+
+    // Allocate element to add to the sliding window
+    newElement = (struct windowElement *)malloc(sizeof(struct windowElement));
+    newElement->packet = out_pkt;
+    newElement->next = NULL;
+
+    // If this is our first packet, set it as the base of the sliding window
+    if (!A_windowBase)
+    {
+        printf("CCH> A_output> Setting A_windowbase\n");
+        A_windowBase = newElement;
+
+        // Since this is our first packet, we can also send it immediately
+        // and update the end of the window
+        send_pkt(A, out_pkt);
+        A_windowEnd = newElement;
+    }
+    else
+    {
+        // Append current element onto end of window sequence
+        if (A_windowEnd)
+        {
+            printf("CCH> A_output> Appending window\n");
+            A_windowEnd->next = newElement;
+        }
+    }
+
+    // See if there is room in the window to flush unsent packets (>= nextseqnum)
+    while (windowlen(A) <= WINDOWSIZE)
+    {
+        if (A_windowEnd && A_windowEnd->next)
+        {
+            // Send unsent packet
+            send_pkt(A, A_windowEnd->next->packet);
+            // Slide end of window up
+            A_windowEnd = A_windowEnd->next;
+        }
+        else
+        {
+            break;
+        }
+    }
+}
+
+void B_output(struct msg message) /* need be completed only for extra credit */
+{
+    printf("CCH> B_output> Got message (noop)\n");
+}
+
+// Transport layer interface called by network layer ("Layer 3") when it receives a packet
+void A_input(struct pkt packet)
+{
+    printf("CCH> A_input> Got packet with seqnum %d\n", packet.seqnum);
+    struct windowElement *currWindowElement;
+
+    // Validate received packet's checksum
+    if (pkt_checksum_valid(&packet))
+    {
+        printf("CCH> A_input> Checksum is valid\n");
+
+        // Check if the packet is an ACK
+        if (strncmp(packet.payload, ACK, strlen(ACK)) == 0)
+        {
+
+            // Packet is ACK; Check for valid sequence number in acknum (must be < "nextseqnum")
+            if (packet.acknum <= A_windowEnd->packet->seqnum)
+            {
+
+                // ACK seqnum is valid: Slide base up to acknum
+                printf("CCH> A_input> Packet is an ACK and valid\n");
+                A_last_ack = &packet;
+                currWindowElement = A_windowBase;
+                while (currWindowElement && currWindowElement->packet->seqnum <= packet.acknum)
+                {
+                    A_windowBase = A_windowBase->next;
+                    currWindowElement = A_windowBase;
+                }
+                stoptimer(A);
+            }
+            else
+            {
+                // acknum was out of bounds: ignore it
+                printf("CCH> A_input> Received invalid ACK (ignoring)\n");
+            }
+        }
+        else
+        {
+            // Packet is a message: send to app
+            // TODO: If bidirectional is to be implemented, an ACK needs to be send here
+            printf("CCH> A_input> Packet contains a message, passing to app\n");
+            stoptimer(A);
+            tolayer5(A, packet.payload);
+        }
+    }
+    else
+    {
+        // Checksum was invalid: ignore data
+        printf("CCH> A_input> Invalid checksum, refusing data\n");
+    }
+}
+
+// Called whenever a timer expires, helpful for timeouts
+void A_timerinterrupt(void)
+{
+    printf("CCH> A_timerinterrupt> Called\n");
+    struct windowElement *currWindowElement;
+
+    // Check if we have unacknowledged packets outstanding
+    if (!A_last_ack || (A_last_ack->acknum <= A_windowEnd->packet->seqnum))
+    {
+        // Unacknowledged packets exist: Resend each one
+        printf("CCH> A_timerinterrupt> Packet timed out, resending outstanding packets\n");
+        currWindowElement = A_windowBase;
+        while (currWindowElement)
+        {
+            send_pkt(A, currWindowElement->packet);
+            currWindowElement = currWindowElement->next;
+        }
+    }
+}
+
+// Initialize "A's" network stack
+void A_init(void)
+{
+    printf("CCH> A_init> init\n");
+    A_windowBase = NULL;
+    A_windowEnd = NULL;
+    A_last_ack = NULL;
+}
+
+/* Note that with simplex transfer from a-to-B, there is no B_output() */
+
+// "B's" layer 4 interface called by layer 3
+void B_input(struct pkt packet)
+{
+    printf("CCH> B_input> Got packet with seqnum %d\n", packet.seqnum);
+    struct windowElement *currWindowElement;
+
+    // Validate received packet's checksum
+    if (pkt_checksum_valid(&packet))
+    {
+        printf("CCH> B_input> Checksum is valid\n");
+
+        // Check if the packet is an ACK
+        if (strncmp(packet.payload, ACK, strlen(ACK)) == 0)
+        {
+
+            // Packet is ACK; Check for valid sequence number in acknum (must be < "nextseqnum")
+            if (packet.acknum <= B_windowEnd->packet->seqnum)
+            {
+
+                // ACK seqnum is valid: Slide base up to acknum
+                printf("CCH> B_input> Packet is an ACK and valid\n");
+                B_last_ack = &packet;
+                currWindowElement = B_windowBase;
+                while (currWindowElement && currWindowElement->packet->seqnum <= packet.acknum)
+                {
+                    B_windowBase = B_windowBase->next;
+                    currWindowElement = B_windowBase;
+                }
+                stoptimer(B);
+            }
+            else
+            {
+                // acknum was out of bounds: ignore it
+                printf("CCH> B_input> Received invalid ACK (ignoring)\n");
+            }
+        }
+        else
+        {
+            // Packet is a message: send to app
+            // TODO: If bidirectional is to be implemented, an ACK needs to be send here
+            printf("CCH> B_input> Packet contains a message, passing to app\n");
+            stoptimer(B);
+            send_ack(B, &packet);
+            tolayer5(B, packet.payload);
+        }
+    }
+    else
+    {
+        // Checksum was invalid: ignore data
+        printf("CCH> B_input> Invalid checksum, refusing data\n");
+    }
+}
+
+// Called whenever a timer expires, helpful for timeouts
+void B_timerinterrupt(void)
+{
+    // TODO: "B" needs to handle timeouts if bidirectional transfer is desired
+}
+
+// Initialize "B's" network stack
+void B_init(void)
+{
+    printf("CCH> B_init> .\n");
+    B_windowBase = NULL;
+    B_windowEnd = NULL;
+    B_last_ack = NULL;
 }
 
 /*****************************************************************
@@ -113,16 +416,7 @@ struct event
 };
 struct event *evlist = NULL; /* the event list */
 
-/* possible events: */
-#define TIMER_INTERRUPT 0
-#define FROM_LAYER5 1
-#define FROM_LAYER3 2
-
-#define OFF 0
-#define ON 1
-#define A 0
-#define B 1
-
+// initialize globals
 int TRACE = 1;   /* for my debugging */
 int nsim = 0;    /* number of messages from 5 to 4 so far */
 int nsimmax = 0; /* number of msgs to generate, then stop */
@@ -134,14 +428,14 @@ int ntolayer3;     /* number sent into layer 3 */
 int nlost;         /* number lost in media */
 int ncorrupt;      /* number corrupted by media*/
 
-main()
+int main(int argc, char *argv[])
 {
     struct event *eventptr;
     struct msg msg2give;
     struct pkt pkt2give;
 
     int i, j;
-    char c;
+    //   char c;
 
     init();
     A_init();
@@ -219,45 +513,46 @@ main()
 
 terminate:
     printf(" Simulator terminated at time %f\n after sending %d msgs from layer5\n", time, nsim);
+    return 0;
 }
 
-init() /* initialize the simulator */
+init()                         /* initialize the simulator */
 {
-    int i;
-    float sum, avg;
-    float jimsrand();
+  int i;
+  float sum, avg;
+  float jimsrand();
 
-    printf("-----  Stop and Wait Network Simulator Version 1.1 -------- \n\n");
-    printf("Enter the number of messages to simulate: ");
-    scanf("%d", &nsimmax);
-    printf("Enter  packet loss probability [enter 0.0 for no loss]:");
-    scanf("%f", &lossprob);
-    printf("Enter packet corruption probability [0.0 for no corruption]:");
-    scanf("%f", &corruptprob);
-    printf("Enter average time between messages from sender's layer5 [ > 0.0]:");
-    scanf("%f", &lambda);
-    printf("Enter TRACE:");
-    scanf("%d", &TRACE);
 
-    srand(9999); /* init random number generator */
-    sum = 0.0;   /* test random number generator for students */
-    for (i = 0; i < 1000; i++)
-        sum = sum + jimsrand(); /* jimsrand() should be uniform in [0,1] */
-    avg = sum / 1000.0;
-    if (avg < 0.25 || avg > 0.75)
-    {
-        printf("It is likely that random number generation on your machine\n");
-        printf("is different from what this emulator expects.  Please take\n");
-        printf("a look at the routine jimsrand() in the emulator code. Sorry. \n");
-        exit();
+   printf("-----  Stop and Wait Network Simulator Version 1.1 -------- \n\n");
+   printf("Enter the number of messages to simulate: ");
+   scanf("%d",&nsimmax);
+   printf("Enter  packet loss probability [enter 0.0 for no loss]:");
+   scanf("%f",&lossprob);
+   printf("Enter packet corruption probability [0.0 for no corruption]:");
+   scanf("%f",&corruptprob);
+   printf("Enter average time between messages from sender's layer5 [ > 0.0]:");
+   scanf("%f",&lambda);
+   printf("Enter TRACE:");
+   scanf("%d",&TRACE);
+
+   srand(9999);              /* init random number generator */
+   sum = 0.0;                /* test random number generator for students */
+   for (i=0; i<1000; i++)
+      sum=sum+jimsrand();    /* jimsrand() should be uniform in [0,1] */
+   avg = sum/1000.0;
+   if (avg < 0.25 || avg > 0.75) {
+    printf("It is likely that random number generation on your machine\n" );
+    printf("is different from what this emulator expects.  Please take\n");
+    printf("a look at the routine jimsrand() in the emulator code. Sorry. \n");
+    exit(1);
     }
 
-    ntolayer3 = 0;
-    nlost = 0;
-    ncorrupt = 0;
+   ntolayer3 = 0;
+   nlost = 0;
+   ncorrupt = 0;
 
-    time = 0.0;              /* initialize time to 0.0 */
-    generate_next_arrival(); /* initialize event list */
+   time=0.0;                    /* initialize time to 0.0 */
+   generate_next_arrival();     /* initialize event list */
 }
 
 /****************************************************************************/
@@ -265,11 +560,11 @@ init() /* initialize the simulator */
 /* isolate all random number generation in one location.  We assume that the*/
 /* system-supplied rand() function return an int in therange [0,mmm]        */
 /****************************************************************************/
-float jimsrand()
+float jimsrand(void)
 {
-    double mmm = 2147483647; /* largest int  - MACHINE DEPENDENT!!!!!!!!   */
-    float x;                 /* individual students may need to change mmm */
-    x = rand() / mmm;        /* x should be uniform in [0,1] */
+    double mmm = 2147483647;   /* largest int  - MACHINE DEPENDENT!!!!!!!!   */
+    float x;                   /* individual students may need to change mmm */
+    x = (float)(rand() / mmm); /* x should be uniform in [0,1] */
     return (x);
 }
 
@@ -277,13 +572,13 @@ float jimsrand()
 /*  The next set of routines handle the event list   */
 /*****************************************************/
 
-generate_next_arrival()
+void generate_next_arrival(void)
 {
     double x, log(), ceil();
     struct event *evptr;
-    char *malloc();
-    float ttime;
-    int tempint;
+    char *p = malloc(1);
+    //   float ttime;
+    //   int tempint;
 
     if (TRACE > 2)
         printf("          GENERATE NEXT ARRIVAL: creating new arrival\n");
@@ -291,7 +586,7 @@ generate_next_arrival()
     x = lambda * jimsrand() * 2; /* x is uniform on [0,2*lambda] */
                                  /* having mean of lambda        */
     evptr = (struct event *)malloc(sizeof(struct event));
-    evptr->evtime = time + x;
+    evptr->evtime = (float)(time + x);
     evptr->evtype = FROM_LAYER5;
     if (BIDIRECTIONAL && (jimsrand() > 0.5))
         evptr->eventity = B;
@@ -300,7 +595,7 @@ generate_next_arrival()
     insertevent(evptr);
 }
 
-insertevent(p) struct event *p;
+void insertevent(struct event *p)
 {
     struct event *q, *qold;
 
@@ -343,10 +638,10 @@ insertevent(p) struct event *p;
     }
 }
 
-printevlist()
+void printevlist(void)
 {
     struct event *q;
-    int i;
+    //  int i;
     printf("--------------\nEvent List Follows:\n");
     for (q = evlist; q != NULL; q = q->next)
     {
@@ -358,9 +653,10 @@ printevlist()
 /********************** Student-callable ROUTINES ***********************/
 
 /* called by students routine to cancel a previously-started timer */
-stoptimer(AorB) int AorB; /* A or B is trying to stop timer */
+void stoptimer(int AorB)
+/* A or B is trying to stop timer */
 {
-    struct event *q, *qold;
+    struct event *q; //,*qold;
 
     if (TRACE > 2)
         printf("          STOP TIMER: stopping timer at %f\n", time);
@@ -389,13 +685,14 @@ stoptimer(AorB) int AorB; /* A or B is trying to stop timer */
     printf("Warning: unable to cancel your timer. It wasn't running.\n");
 }
 
-starttimer(AorB, increment) int AorB; /* A or B is trying to stop timer */
-float increment;
+void starttimer(int AorB, float increment)
+/* A or B is trying to stop timer */
+
 {
 
     struct event *q;
     struct event *evptr;
-    char *malloc();
+    char *p = malloc(1);
 
     if (TRACE > 2)
         printf("          START TIMER: starting timer at %f\n", time);
@@ -422,7 +719,7 @@ struct pkt packet;
 {
     struct pkt *mypktptr;
     struct event *evptr, *q;
-    char *malloc();
+    //  char *malloc();
     float lastime, x, jimsrand();
     int i;
 
