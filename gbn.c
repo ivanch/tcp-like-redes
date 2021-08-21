@@ -151,7 +151,6 @@ struct pkt *make_pkt(int seqnum, char data[])
 void send_ack(int AorB, struct pkt *packet)
 {
     int seqnum = packet->seqnum;
-    // char msg[MSGSIZE] = {'A', 'C', 'K', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     char msg[MSGSIZE] = "ACK";
 
     // Build packet
@@ -175,7 +174,7 @@ void send_pkt(int AorB, struct pkt *pkt_to_send)
 }
 
 // Mensagem que veio de cima, envia para baixo...
-// Recebe mensagem e envia um pacote
+// Recebe mensagem e envia um pacote para B
 void A_output(struct msg message)
 {
     printf("[A] Mensagem recebida.\n");
@@ -332,7 +331,6 @@ void B_input(struct pkt packet)
 // Timeout de B
 void B_timerinterrupt(void)
 {
-    // TODO: "B" needs to handle timeouts if bidirectional transfer is desired
 }
 
 // Inicializa B

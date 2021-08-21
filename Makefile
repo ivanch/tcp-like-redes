@@ -2,7 +2,7 @@
 all: clean altbit gbn
 
 clean:
-	rm altbit gbn
+	rm -f altbit gbn
 
 altbit:
 	gcc altbit.c -o altbit

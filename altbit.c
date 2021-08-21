@@ -84,26 +84,30 @@ struct pkt *make_pkt(int seqnum, char data[])
 
 void send_ack(int caller, struct pkt *pkt_to_ack)
 {
+    char msg[MSGSIZE] = "ACK";
     int seqnum = pkt_to_ack->seqnum;
-    char msg[MSGSIZE] = {'A', 'C', 'K', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     struct pkt *ack_pkt = make_pkt(seqnum, msg);
     ack_pkt->acknum = pkt_to_ack->seqnum;
+    ack_pkt->checksum = calc_checksum(ack_pkt);
     tolayer3(caller, *ack_pkt);
 }
 
 void send_nack(int caller, struct pkt *pkt_to_nack)
 {
+    char msg[MSGSIZE] = "NACK";
     int seqnum = pkt_to_nack->seqnum;
-    char msg[MSGSIZE] = {'N', 'A', 'C', 'K', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     struct pkt *nack_pkt = make_pkt(seqnum, msg);
     nack_pkt->acknum = 0;
+    nack_pkt->checksum = calc_checksum(nack_pkt);
     tolayer3(caller, *nack_pkt);
 }
 
-void send_pkt(int caller, struct pkt *pkt_to_send)
+void send_pkt(int AorB, struct pkt *pkt_to_send)
 {
-    tolayer3(caller, *pkt_to_send);
-    starttimer(caller, TIMEOUT);
+    if (AorB == A) printf("[A] Pacote enviado.\n");
+    else if (AorB == B) printf("[B] Pacote enviado.\n");
+    tolayer3(AorB, *pkt_to_send);
+    starttimer(AorB, TIMEOUT);
 }
 
 /* Pacote que vem da camada 5 para baixo */
