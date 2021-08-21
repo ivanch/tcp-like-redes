@@ -52,340 +52,294 @@ struct pkt
     char payload[MSGSIZE];
 };
 
-/*** START Charles Hooper's Code ***/
+// *******************************************************************************
+// Começo do código modificado
+// *******************************************************************************
 
-/* The sliding window is implemented as a linked list with pointers to the
- * base of the window as well as the end (referred to as `base` and
- * `nextseqnum` in our textbooks) */
-struct windowElement
+/*  Janela de envio, indicando o pacote a ser enviado e o próximo a ser enviado */
+struct window
 {
     struct pkt *packet;
-    struct windowElement *next;
+    struct window *next;
 };
 
-struct windowElement *A_windowBase;
-struct windowElement *A_windowEnd;
-struct windowElement *B_windowBase;
-struct windowElement *B_windowEnd;
+struct window *A_baseWindow = NULL;    // Base de envio de A
+struct window *A_endWindow = NULL;     // Final de envio de A
+struct window *B_baseWindow = NULL;    // Base de envio de B
+struct window *B_endWindow = NULL;     // Final de envio de B
 
-// Let's store last acks received
-struct pkt *A_last_ack;
-struct pkt *B_last_ack;
+// Último ACK recebido
+struct pkt *A_last_ack = NULL;
+struct pkt *B_last_ack = NULL;
 
-// Get highest unused seqnum. start is ptr to where in window to start search
-int get_next_seqnum(struct windowElement *start)
+// Retorna o próximo seqnum não usado
+int get_next_seqnum(struct window *start)
 {
+    if (start == NULL)
+        return 0;
+
     int seqnum = 0;
 
-    while (start)
+    while (start != NULL)
     {
-        seqnum = start->packet->seqnum + 1;
-        start = start->next;
+        if (start->next == NULL)
+        {
+            seqnum = start->packet->seqnum + 1;
+            break;
+        }
+        else
+            start = start->next;
     }
 
     return seqnum;
 }
 
-// Return the size of the window in # of packets
+// Retorna o tamanho da janela (em pacotes)
 int windowlen(int AorB)
 {
-    struct windowElement *start, *end;
-    int sz = 0;
+    struct window *start, *end;
+    int ret = 0;
 
     if (AorB == A)
     {
-        start = A_windowBase;
-        end = A_windowEnd;
+        start = A_baseWindow;
+        end = A_endWindow;
     }
     else if (AorB == B)
     {
-        start = B_windowBase;
-        end = B_windowEnd;
-    }
-    else
-    {
-        printf("Invalid window target!\n");
-        return -1;
+        start = B_baseWindow;
+        end = B_endWindow;
     }
 
-    while (start && start->packet->seqnum <= end->packet->seqnum)
+    // Conta a quantidade de pacotes entre o começo e o final
+    while (start != NULL && start->packet->seqnum <= end->packet->seqnum)
     {
-        sz++;
+        ret++;
         start = start->next;
     }
-    return sz;
+    return ret;
 }
 
-// Checksum is calculated as the sum of the fields (seqnum, acknum, data)
+// Calcula o checksum do pacote
 int calc_checksum(struct pkt *tgt_pkt)
 {
     int checksum = 0;
     checksum += tgt_pkt->seqnum;
     checksum += tgt_pkt->acknum;
-    for (int i = 0; i < sizeof(tgt_pkt->payload) / sizeof(char); i++)
+    for (int i = 0; i < MSGSIZE; i++)
         checksum += tgt_pkt->payload[i];
     return checksum;
 }
 
-// Function that returns bool describing if a given packet's checksum is valid
-int pkt_checksum_valid(struct pkt *tgt_pkt)
+// Cria um novo pacote com base num seqnum e um payload
+struct pkt *make_pkt(int seqnum, char data[])
 {
-    int expectedChecksum = calc_checksum(tgt_pkt);
-    return (expectedChecksum == tgt_pkt->checksum);
+    struct pkt *packet = (struct pkt*) malloc(sizeof(struct pkt));
+    packet->seqnum = seqnum;
+    packet->acknum = 0;
+
+    // Copia o payload
+    for (int i = 0; i < MSGSIZE; i++)
+        packet->payload[i] = data[i];
+
+    // calcula checksum
+    packet->checksum = calc_checksum(packet);
+    return packet;
 }
 
-// Returns a pointer to a newly initialized packet
-struct pkt *make_pkt(int seqnum, char data[MSGSIZE])
+// Envia um ACK de AorB do packet para o outro lado
+void send_ack(int AorB, struct pkt *packet)
 {
-    // init/copy data into fields
-    struct pkt *gen_pkt = (struct pkt *)malloc(sizeof(struct pkt));
-    gen_pkt->seqnum = seqnum;
-    gen_pkt->acknum = 0;
-
-    // copy payload into packet
-    for (int i = 0; i < sizeof(gen_pkt->payload) / sizeof(char); i++)
-    {
-        gen_pkt->payload[i] = data[i];
-    }
-
-    // calculate checksum
-    gen_pkt->checksum = calc_checksum(gen_pkt);
-    return gen_pkt;
-}
-
-// Sends an ACK by `caller` in response to `pkt_to_ack`
-void send_ack(int caller, struct pkt *pkt_to_ack)
-{
-    int seqnum = pkt_to_ack->seqnum;
-    char msg[MSGSIZE] = {'A', 'C', 'K', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    int seqnum = packet->seqnum;
+    // char msg[MSGSIZE] = {'A', 'C', 'K', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    char msg[MSGSIZE] = "ACK";
 
     // Build packet
-    struct pkt *ack_pkt = make_pkt(seqnum, msg);
-    ack_pkt->acknum = pkt_to_ack->seqnum;
+    struct pkt *packet_ack = make_pkt(seqnum, msg);
+    packet_ack->acknum = packet->seqnum;
 
-    // We modified the packet so recalc checksum
-    ack_pkt->checksum = calc_checksum(ack_pkt);
+    // Recalcula checksum com novos dados
+    packet_ack->checksum = calc_checksum(packet_ack);
 
-    // Send
-    tolayer3(caller, *ack_pkt);
+    // Envia
+    tolayer3(AorB, *packet_ack);
 }
 
-// Sends `pkt_to_send` by `caller` and starts timer for detecting timeouts
-void send_pkt(int caller, struct pkt *pkt_to_send)
+// Envia um pacote de AorB para o outro lado, e cria um timeout
+void send_pkt(int AorB, struct pkt *pkt_to_send)
 {
-    tolayer3(caller, *pkt_to_send);
-    starttimer(caller, TIMEOUT);
+    if (AorB == A) printf("[A] Pacote enviado.\n");
+    else if (AorB == B) printf("[B] Pacote enviado.\n");
+    tolayer3(AorB, *pkt_to_send);
+    starttimer(AorB, TIMEOUT);
 }
 
-// Transport layer interface called by the app layer ("layer 5")
+// Mensagem que veio de cima, envia para baixo...
+// Recebe mensagem e envia um pacote
 void A_output(struct msg message)
 {
-    printf("CCH> A_output> Got message from app layer, sending packet\n");
-    struct pkt *out_pkt;
-    struct windowElement *newElement, *flushElement;
-    int seqnum;
+    printf("[A] Mensagem recebida.\n");
+    int seqnum = get_next_seqnum(A_endWindow);
 
-    // Build packet: Seqnum is "nextseqnum" or zero
-    seqnum = get_next_seqnum(A_windowEnd);
-    //seqnum = A_windowEnd ? (A_windowEnd->packet->seqnum + 1) : 0;
-    out_pkt = make_pkt(seqnum, message.data);
-
-    // Allocate element to add to the sliding window
-    newElement = (struct windowElement *)malloc(sizeof(struct windowElement));
-    newElement->packet = out_pkt;
+    struct pkt *packet = make_pkt(seqnum, message.data);
+    struct window *newElement = (struct window *) malloc(sizeof(struct window));
+    newElement->packet = packet;
     newElement->next = NULL;
 
-    // If this is our first packet, set it as the base of the sliding window
-    if (!A_windowBase)
+    if (A_baseWindow == NULL) // Se for o primeiro pacote a ser enviado
     {
-        printf("CCH> A_output> Setting A_windowbase\n");
-        A_windowBase = newElement;
-
-        // Since this is our first packet, we can also send it immediately
-        // and update the end of the window
-        send_pkt(A, out_pkt);
-        A_windowEnd = newElement;
+        A_baseWindow = newElement;
+        A_endWindow = newElement;
+        send_pkt(A, packet);
+        return;
     }
-    else
+    else // Se não, adiciona na fila
     {
-        // Append current element onto end of window sequence
-        if (A_windowEnd)
-        {
-            printf("CCH> A_output> Appending window\n");
-            A_windowEnd->next = newElement;
-        }
+        A_endWindow->next = newElement;
     }
 
-    // See if there is room in the window to flush unsent packets (>= nextseqnum)
+    // Verifica se é possível enviar mais pacotes
     while (windowlen(A) <= WINDOWSIZE)
     {
-        if (A_windowEnd && A_windowEnd->next)
+        if (A_endWindow != NULL && A_endWindow->next != NULL)
         {
-            // Send unsent packet
-            send_pkt(A, A_windowEnd->next->packet);
-            // Slide end of window up
-            A_windowEnd = A_windowEnd->next;
+            // Envia pacote e define o final da janela como sendo o último enviado
+            send_pkt(A, A_endWindow->next->packet);
+            A_endWindow = A_endWindow->next;
         }
-        else
-        {
-            break;
-        }
+        else break;
     }
 }
 
 void B_output(struct msg message) /* need be completed only for extra credit */
 {
-    printf("CCH> B_output> Got message (noop)\n");
+    printf("[B] Mensagem recebida.\n");
 }
 
-// Transport layer interface called by network layer ("Layer 3") when it receives a packet
+// Pacote recebido da camada 3 para cima...
+// Recebe um pacote e envia uma mensagem
 void A_input(struct pkt packet)
 {
-    printf("CCH> A_input> Got packet with seqnum %d\n", packet.seqnum);
-    struct windowElement *currWindowElement;
+    printf("[A] Pacote recebido. ");
+    struct window *current_window;
+    int local_checksum = calc_checksum(&packet);
 
-    // Validate received packet's checksum
-    if (pkt_checksum_valid(&packet))
+    // Verifica o checksum
+    if (local_checksum == packet.checksum) // Checksum válido
     {
-        printf("CCH> A_input> Checksum is valid\n");
-
-        // Check if the packet is an ACK
-        if (strncmp(packet.payload, ACK, strlen(ACK)) == 0)
+        if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK
         {
+            printf("(ACK)\n");
 
-            // Packet is ACK; Check for valid sequence number in acknum (must be < "nextseqnum")
-            if (packet.acknum <= A_windowEnd->packet->seqnum)
+            if (packet.acknum <= A_endWindow->packet->seqnum) // Verifica se o ACKNUM é válido
             {
-
-                // ACK seqnum is valid: Slide base up to acknum
-                printf("CCH> A_input> Packet is an ACK and valid\n");
+                // Ajusta a base de envio da janela para o próximo pacote
                 A_last_ack = &packet;
-                currWindowElement = A_windowBase;
-                while (currWindowElement && currWindowElement->packet->seqnum <= packet.acknum)
+                current_window = A_baseWindow;
+                while (current_window != NULL && current_window->packet->seqnum <= packet.acknum)
                 {
-                    A_windowBase = A_windowBase->next;
-                    currWindowElement = A_windowBase;
+                    A_baseWindow = A_baseWindow->next;
+                    current_window = A_baseWindow;
                 }
                 stoptimer(A);
             }
-            else
-            {
-                // acknum was out of bounds: ignore it
-                printf("CCH> A_input> Received invalid ACK (ignoring)\n");
-            }
+            // Se o ACKNUM não for válido, é ignorado e o timeout vai disparar
         }
-        else
+        else // Se não for um ACK
         {
-            // Packet is a message: send to app
-            // TODO: If bidirectional is to be implemented, an ACK needs to be send here
-            printf("CCH> A_input> Packet contains a message, passing to app\n");
+            printf("(MSG)\n");
+
+            // Envia mensagem para a camada de cima...
             stoptimer(A);
             tolayer5(A, packet.payload);
         }
     }
-    else
-    {
-        // Checksum was invalid: ignore data
-        printf("CCH> A_input> Invalid checksum, refusing data\n");
-    }
+    // Se o checksum for inválido, é ignorado e o timeout vai disparar
 }
 
-// Called whenever a timer expires, helpful for timeouts
+// Timeout de A
 void A_timerinterrupt(void)
 {
-    printf("CCH> A_timerinterrupt> Called\n");
-    struct windowElement *currWindowElement;
+    printf("[A] Timeout. ");
+    struct window *current_window;
 
-    // Check if we have unacknowledged packets outstanding
-    if (!A_last_ack || (A_last_ack->acknum <= A_windowEnd->packet->seqnum))
+    // Verifica se há pacotes que não receberam ACK
+    if (A_last_ack == NULL || (A_last_ack->acknum <= A_endWindow->packet->seqnum))
     {
-        // Unacknowledged packets exist: Resend each one
-        printf("CCH> A_timerinterrupt> Packet timed out, resending outstanding packets\n");
-        currWindowElement = A_windowBase;
-        while (currWindowElement)
+        printf("(Reenviando pacotes)\n");
+        current_window = A_baseWindow;
+        while (current_window != NULL)
         {
-            send_pkt(A, currWindowElement->packet);
-            currWindowElement = currWindowElement->next;
+            send_pkt(A, current_window->packet);
+            current_window = current_window->next;
         }
     }
+    else printf("\n");
 }
 
-// Initialize "A's" network stack
+// Inicializa o A
 void A_init(void)
 {
-    printf("CCH> A_init> init\n");
-    A_windowBase = NULL;
-    A_windowEnd = NULL;
+    A_baseWindow = NULL;
+    A_endWindow = NULL;
     A_last_ack = NULL;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
 
-// "B's" layer 4 interface called by layer 3
+// Pacote recebido da camada 3 que vai para cima...
+// Recebe um pacote e envia uma mensagem
 void B_input(struct pkt packet)
 {
-    printf("CCH> B_input> Got packet with seqnum %d\n", packet.seqnum);
-    struct windowElement *currWindowElement;
+    printf("[B] Pacote recebido. ");
+    struct window *current_window;
 
-    // Validate received packet's checksum
-    if (pkt_checksum_valid(&packet))
+    // Verifica checksum do pacote
+    int local_checksum = calc_checksum(&packet);
+
+    // Verifica o checksum
+    if (local_checksum == packet.checksum) // Checksum válido
     {
-        printf("CCH> B_input> Checksum is valid\n");
-
-        // Check if the packet is an ACK
-        if (strncmp(packet.payload, ACK, strlen(ACK)) == 0)
+        if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK
         {
+            printf("(ACK)\n");
 
-            // Packet is ACK; Check for valid sequence number in acknum (must be < "nextseqnum")
-            if (packet.acknum <= B_windowEnd->packet->seqnum)
+            if (packet.acknum <= B_endWindow->packet->seqnum) // Verifica se o ACKNUM é válido
             {
-
-                // ACK seqnum is valid: Slide base up to acknum
-                printf("CCH> B_input> Packet is an ACK and valid\n");
+                // Ajuda a base de envio da janela para o próximo pacote
                 B_last_ack = &packet;
-                currWindowElement = B_windowBase;
-                while (currWindowElement && currWindowElement->packet->seqnum <= packet.acknum)
+                current_window = B_baseWindow;
+                while (current_window != NULL && current_window->packet->seqnum <= packet.acknum)
                 {
-                    B_windowBase = B_windowBase->next;
-                    currWindowElement = B_windowBase;
+                    B_baseWindow = B_baseWindow->next;
+                    current_window = B_baseWindow;
                 }
-                stoptimer(B);
             }
-            else
-            {
-                // acknum was out of bounds: ignore it
-                printf("CCH> B_input> Received invalid ACK (ignoring)\n");
-            }
+            // Se o ACKNUM não for válido, é ignorado
         }
-        else
+        else // Se não for um ACK
         {
-            // Packet is a message: send to app
-            // TODO: If bidirectional is to be implemented, an ACK needs to be send here
-            printf("CCH> B_input> Packet contains a message, passing to app\n");
-            stoptimer(B);
+            printf("(MSG)\n");
+
+            // Envia mensagem para a camada de cima e envia um ACK para outro lado...
             send_ack(B, &packet);
             tolayer5(B, packet.payload);
         }
     }
-    else
-    {
-        // Checksum was invalid: ignore data
-        printf("CCH> B_input> Invalid checksum, refusing data\n");
-    }
+
 }
 
-// Called whenever a timer expires, helpful for timeouts
+// Timeout de B
 void B_timerinterrupt(void)
 {
     // TODO: "B" needs to handle timeouts if bidirectional transfer is desired
 }
 
-// Initialize "B's" network stack
+// Inicializa B
 void B_init(void)
 {
-    printf("CCH> B_init> .\n");
-    B_windowBase = NULL;
-    B_windowEnd = NULL;
+    B_baseWindow = NULL;
+    B_endWindow = NULL;
     B_last_ack = NULL;
 }
 
@@ -516,43 +470,43 @@ terminate:
     return 0;
 }
 
-init()                         /* initialize the simulator */
+init() /* initialize the simulator */
 {
-  int i;
-  float sum, avg;
-  float jimsrand();
+    int i;
+    float sum, avg;
+    float jimsrand();
 
+    printf("-----  Stop and Wait Network Simulator Version 1.1 -------- \n\n");
+    printf("Enter the number of messages to simulate: ");
+    scanf("%d", &nsimmax);
+    printf("Enter  packet loss probability [enter 0.0 for no loss]:");
+    scanf("%f", &lossprob);
+    printf("Enter packet corruption probability [0.0 for no corruption]:");
+    scanf("%f", &corruptprob);
+    printf("Enter average time between messages from sender's layer5 [ > 0.0]:");
+    scanf("%f", &lambda);
+    printf("Enter TRACE:");
+    scanf("%d", &TRACE);
 
-   printf("-----  Stop and Wait Network Simulator Version 1.1 -------- \n\n");
-   printf("Enter the number of messages to simulate: ");
-   scanf("%d",&nsimmax);
-   printf("Enter  packet loss probability [enter 0.0 for no loss]:");
-   scanf("%f",&lossprob);
-   printf("Enter packet corruption probability [0.0 for no corruption]:");
-   scanf("%f",&corruptprob);
-   printf("Enter average time between messages from sender's layer5 [ > 0.0]:");
-   scanf("%f",&lambda);
-   printf("Enter TRACE:");
-   scanf("%d",&TRACE);
-
-   srand(9999);              /* init random number generator */
-   sum = 0.0;                /* test random number generator for students */
-   for (i=0; i<1000; i++)
-      sum=sum+jimsrand();    /* jimsrand() should be uniform in [0,1] */
-   avg = sum/1000.0;
-   if (avg < 0.25 || avg > 0.75) {
-    printf("It is likely that random number generation on your machine\n" );
-    printf("is different from what this emulator expects.  Please take\n");
-    printf("a look at the routine jimsrand() in the emulator code. Sorry. \n");
-    exit(1);
+    srand(9999); /* init random number generator */
+    sum = 0.0;   /* test random number generator for students */
+    for (i = 0; i < 1000; i++)
+        sum = sum + jimsrand(); /* jimsrand() should be uniform in [0,1] */
+    avg = sum / 1000.0;
+    if (avg < 0.25 || avg > 0.75)
+    {
+        printf("It is likely that random number generation on your machine\n");
+        printf("is different from what this emulator expects.  Please take\n");
+        printf("a look at the routine jimsrand() in the emulator code. Sorry. \n");
+        exit(1);
     }
 
-   ntolayer3 = 0;
-   nlost = 0;
-   ncorrupt = 0;
+    ntolayer3 = 0;
+    nlost = 0;
+    ncorrupt = 0;
 
-   time=0.0;                    /* initialize time to 0.0 */
-   generate_next_arrival();     /* initialize event list */
+    time = 0.0;              /* initialize time to 0.0 */
+    generate_next_arrival(); /* initialize event list */
 }
 
 /****************************************************************************/
