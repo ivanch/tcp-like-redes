@@ -75,6 +75,10 @@ struct window *B_endWindow = NULL;	// Final de envio de B
 struct pkt *A_last_ack = NULL;
 struct pkt *B_last_ack = NULL;
 
+// Auxiliar para contar o próximo seqnum esperado
+int A_next_seqnum = 0;
+int B_next_seqnum = 0;
+
 // Retorna o próximo seqnum não usado
 int get_next_seqnum(struct window *start)
 {
@@ -210,6 +214,10 @@ void B_output(struct msg message) /* need be completed only for extra credit */
 void A_input(struct pkt packet)
 {
 	printf("[A] Pacote recebido. ");
+
+	if (packet.seqnum != A_next_seqnum)
+		return printf("(descartado)\n"); // Pacote é descartado, timeout de B irá disparar
+
 	int local_checksum = calc_checksum(&packet);
 
 	// Verifica o checksum
@@ -223,12 +231,7 @@ void A_input(struct pkt packet)
 			{
 				// Ajusta a base de envio da janela para o próximo pacote
 				A_last_ack = &packet;
-				struct window *current_window = A_baseWindow;
-				while (current_window != NULL && current_window->packet->seqnum <= packet.acknum)
-				{
-					A_baseWindow = A_baseWindow->next;
-					current_window = A_baseWindow;
-				}
+				A_baseWindow = A_baseWindow->next;
 				stoptimer(A);
 			}
 			// Se o ACKNUM não for válido, é ignorado e o timeout vai disparar
@@ -241,6 +244,9 @@ void A_input(struct pkt packet)
 			stoptimer(A);
 			tolayer5(A, packet.payload);
 		}
+
+		// Ajusta o próximo seqnum esperado
+		A_next_seqnum = packet.seqnum + 1;
 	}
 	// Se o checksum for inválido, é ignorado e o timeout vai disparar
 }
@@ -272,6 +278,7 @@ void A_init(void)
 	A_baseWindow = NULL;
 	A_endWindow = NULL;
 	A_last_ack = NULL;
+	A_next_seqnum = 0;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
@@ -281,7 +288,9 @@ void A_init(void)
 void B_input(struct pkt packet)
 {
 	printf("[B] Pacote recebido. ");
-	struct window *current_window;
+
+	if (packet.seqnum != B_next_seqnum)
+		return printf("(descartado)\n"); // Pacote é descartado, timeout de A irá disparar
 
 	// Verifica checksum do pacote
 	int local_checksum = calc_checksum(&packet);
@@ -289,7 +298,7 @@ void B_input(struct pkt packet)
 	// Verifica o checksum
 	if (local_checksum == packet.checksum) // Checksum válido
 	{
-		if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK
+		if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK (não usado aqui)
 		{
 			printf("(ACK)\n");
 
@@ -297,12 +306,7 @@ void B_input(struct pkt packet)
 			{
 				// Ajuda a base de envio da janela para o próximo pacote
 				B_last_ack = &packet;
-				current_window = B_baseWindow;
-				while (current_window != NULL && current_window->packet->seqnum <= packet.acknum)
-				{
-					B_baseWindow = B_baseWindow->next;
-					current_window = B_baseWindow;
-				}
+				B_baseWindow = B_baseWindow->next;
 			}
 			// Se o ACKNUM não for válido, é ignorado
 		}
@@ -314,6 +318,9 @@ void B_input(struct pkt packet)
 			send_ack(B, &packet);
 			tolayer5(B, packet.payload);
 		}
+
+		// Ajusta o próximo seqnum esperado
+		B_next_seqnum = packet.seqnum + 1;
 	}
 }
 
@@ -328,6 +335,7 @@ void B_init(void)
 	B_baseWindow = NULL;
 	B_endWindow = NULL;
 	B_last_ack = NULL;
+	B_next_seqnum = 0;
 }
 
 // *******************************************************************************
