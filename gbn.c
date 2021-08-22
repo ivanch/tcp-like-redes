@@ -76,30 +76,11 @@ struct pkt *A_last_ack = NULL;
 struct pkt *B_last_ack = NULL;
 
 // Auxiliar para contar o próximo seqnum esperado
+int A_expect_seqnum = 0;
+int B_expect_seqnum = 0;
+// Auxiliar para contar o próximo seqnum a ser usado
 int A_next_seqnum = 0;
 int B_next_seqnum = 0;
-
-// Retorna o próximo seqnum não usado
-int get_next_seqnum(struct window *start)
-{
-	if (start == NULL)
-		return 0;
-
-	int seqnum = 0;
-
-	while (start != NULL)
-	{
-		if (start->next == NULL)
-		{
-			seqnum = start->packet->seqnum + 1;
-			break;
-		}
-		else
-			start = start->next;
-	}
-
-	return seqnum;
-}
 
 // Calcula o checksum do pacote
 int calc_checksum(struct pkt *tgt_pkt)
@@ -131,11 +112,8 @@ struct pkt *make_pkt(int seqnum, char data[])
 // Envia um ACK de AorB do packet para o outro lado
 void send_ack(int AorB, struct pkt *packet)
 {
-	int seqnum = packet->seqnum;
 	char msg[MSGSIZE] = "ACK";
-
-	// Build packet
-	struct pkt *packet_ack = make_pkt(seqnum, msg);
+	struct pkt *packet_ack = make_pkt(packet->seqnum, msg);
 	packet_ack->acknum = packet->seqnum;
 
 	// Recalcula checksum com novos dados
@@ -161,12 +139,13 @@ void send_pkt(int AorB, struct pkt *pkt_to_send)
 void A_output(struct msg message)
 {
 	printf("[A] Mensagem recebida.\n");
-	int seqnum = get_next_seqnum(A_endWindow);
 
-	struct pkt *packet = make_pkt(seqnum, message.data);
+	struct pkt *packet = make_pkt(A_next_seqnum, message.data);
 	struct window *newElement = (struct window *)malloc(sizeof(struct window));
 	newElement->packet = packet;
 	newElement->next = NULL;
+
+	A_next_seqnum++;
 
 	if (A_baseWindow == NULL) // Se for o primeiro pacote a ser enviado
 	{
@@ -178,29 +157,6 @@ void A_output(struct msg message)
 	else // Se não, adiciona na fila
 	{
 		A_endWindow->next = newElement;
-	}
-
-	// Conta a quantidade de pacotes entre o começo e o final
-	struct window *start = A_baseWindow,
-				  *end = A_endWindow;
-	int packets = 0;
-	while (start != NULL && start->packet->seqnum <= end->packet->seqnum)
-	{
-		packets++;
-		start = start->next;
-	}
-
-	// Verifica se é possível enviar mais pacotes
-	while (packets <= WINDOWSIZE)
-	{
-		if (A_endWindow != NULL && A_endWindow->next != NULL)
-		{
-			// Envia pacote e define o final da janela como sendo o último enviado
-			send_pkt(A, A_endWindow->next->packet);
-			A_endWindow = A_endWindow->next;
-		}
-		else
-			break;
 	}
 }
 
@@ -215,7 +171,7 @@ void A_input(struct pkt packet)
 {
 	printf("[A] Pacote recebido. ");
 
-	if (packet.seqnum != A_next_seqnum)
+	if (packet.seqnum != A_expect_seqnum)
 		return printf("(descartado)\n"); // Pacote é descartado, timeout de B irá disparar
 
 	int local_checksum = calc_checksum(&packet);
@@ -234,6 +190,7 @@ void A_input(struct pkt packet)
 				A_baseWindow = A_baseWindow->next;
 				stoptimer(A);
 			}
+			else return;
 			// Se o ACKNUM não for válido, é ignorado e o timeout vai disparar
 		}
 		else // Se não for um ACK
@@ -246,7 +203,7 @@ void A_input(struct pkt packet)
 		}
 
 		// Ajusta o próximo seqnum esperado
-		A_next_seqnum = packet.seqnum + 1;
+		A_expect_seqnum = packet.seqnum + 1;
 	}
 	// Se o checksum for inválido, é ignorado e o timeout vai disparar
 }
@@ -278,6 +235,7 @@ void A_init(void)
 	A_baseWindow = NULL;
 	A_endWindow = NULL;
 	A_last_ack = NULL;
+	A_expect_seqnum = 0;
 	A_next_seqnum = 0;
 }
 
@@ -289,7 +247,7 @@ void B_input(struct pkt packet)
 {
 	printf("[B] Pacote recebido. ");
 
-	if (packet.seqnum != B_next_seqnum)
+	if (packet.seqnum != B_expect_seqnum)
 		return printf("(descartado)\n"); // Pacote é descartado, timeout de A irá disparar
 
 	// Verifica checksum do pacote
@@ -308,6 +266,7 @@ void B_input(struct pkt packet)
 				B_last_ack = &packet;
 				B_baseWindow = B_baseWindow->next;
 			}
+			else return;
 			// Se o ACKNUM não for válido, é ignorado
 		}
 		else // Se não for um ACK
@@ -320,11 +279,11 @@ void B_input(struct pkt packet)
 		}
 
 		// Ajusta o próximo seqnum esperado
-		B_next_seqnum = packet.seqnum + 1;
+		B_expect_seqnum = packet.seqnum + 1;
 	}
 }
 
-// Timeout de B
+// Timeout de B (não usado)
 void B_timerinterrupt(void)
 {
 }
@@ -335,6 +294,7 @@ void B_init(void)
 	B_baseWindow = NULL;
 	B_endWindow = NULL;
 	B_last_ack = NULL;
+	B_expect_seqnum = 0;
 	B_next_seqnum = 0;
 }
 
