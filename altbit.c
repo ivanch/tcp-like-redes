@@ -52,7 +52,11 @@ struct pkt
     char payload[MSGSIZE];
 };
 
-/*** START Charles Hooper's Code ***/
+// *******************************************************************************
+// *******************************************************************************
+// ************ Começo do código modificado
+// *******************************************************************************
+// *******************************************************************************
 
 // Let's store last packet sent so we can resend it later
 struct pkt *last_pkt;
@@ -82,25 +86,15 @@ struct pkt *make_pkt(int seqnum, char data[])
     return gen_pkt;
 }
 
-void send_ack(int caller, struct pkt *pkt_to_ack)
-{
-    char msg[MSGSIZE] = "ACK";
-    int seqnum = pkt_to_ack->seqnum;
-    struct pkt *ack_pkt = make_pkt(seqnum, msg);
-    ack_pkt->acknum = pkt_to_ack->seqnum;
-    ack_pkt->checksum = calc_checksum(ack_pkt);
-    tolayer3(caller, *ack_pkt);
-}
-
-void send_nack(int caller, struct pkt *pkt_to_nack)
-{
-    char msg[MSGSIZE] = "NACK";
-    int seqnum = pkt_to_nack->seqnum;
-    struct pkt *nack_pkt = make_pkt(seqnum, msg);
-    nack_pkt->acknum = 0;
-    nack_pkt->checksum = calc_checksum(nack_pkt);
-    tolayer3(caller, *nack_pkt);
-}
+// void send_ack(int caller, struct pkt *pkt_to_ack)
+// {
+//     char msg[MSGSIZE] = "ACK";
+//     int seqnum = pkt_to_ack->seqnum;
+//     struct pkt *ack_pkt = make_pkt(seqnum, msg);
+//     ack_pkt->acknum = pkt_to_ack->seqnum;
+//     ack_pkt->checksum = calc_checksum(ack_pkt);
+//     tolayer3(caller, *ack_pkt);
+// }
 
 void send_pkt(int AorB, struct pkt *pkt_to_send)
 {
@@ -147,7 +141,6 @@ void A_input(struct pkt packet)
             // Se for um ACK do último pacote
             if (packet.acknum == last_pkt->seqnum)
             {
-                // printf("[A] ACK recebido.\n");
                 last_ack = &packet;
                 stoptimer(A);
             }
@@ -171,9 +164,17 @@ void A_input(struct pkt packet)
     }
     else // Checksum inválido
     {
-        // Envia NACK e reseta o timer
         printf("\n[A] Checksum inválido (%d != %d)\n", local_checksum, packet.checksum);
-        send_nack(A, &packet);
+
+        // Envia NACK
+        char msg[MSGSIZE] = "NACK";
+        int seqnum = packet.seqnum;
+        struct pkt *nack_pkt = make_pkt(seqnum, msg);
+        nack_pkt->acknum = 0;
+        nack_pkt->checksum = calc_checksum(nack_pkt);
+        tolayer3(A, *nack_pkt);
+
+        // Reseta o timer
         stoptimer(A);
         starttimer(A, TIMEOUT);
     }
@@ -189,8 +190,7 @@ void A_timerinterrupt(void)
     }
 }
 
-/* the following routine will be called once (only) before any other */
-/* entity A routines are called. You can use it to do any initialization */
+/* Inicialização de A */
 void A_init(void)
 {
     last_pkt = NULL;
@@ -204,21 +204,32 @@ void B_input(struct pkt packet)
 {
     printf("[B] Pacote recebido (MSG).\n");
 
-    // Envia um ACK e manda a mensagem para a camda de cima
-    send_ack(B, &packet);
+    // Envia ACK
+    char msg[MSGSIZE] = "ACK";
+    int seqnum = packet.seqnum;
+    struct pkt *ack_pkt = make_pkt(seqnum, msg);
+    ack_pkt->acknum = seqnum;
+    ack_pkt->checksum = calc_checksum(ack_pkt);
+    tolayer3(B, *ack_pkt);
+
+    // Envia o payload para aplicação
     tolayer5(B, packet.payload);
 }
 
-/* called when B's timer goes off */
+/* Timeout de B, não usado */
 void B_timerinterrupt(void)
 {
 }
 
-/* the following rouytine will be called once (only) before any other */
-/* entity B routines are called. You can use it to do any initialization */
 void B_init(void)
 {
 }
+
+// *******************************************************************************
+// *******************************************************************************
+// ************ Final do código modificado
+// *******************************************************************************
+// *******************************************************************************
 
 
 /*****************************************************************

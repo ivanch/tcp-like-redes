@@ -53,22 +53,25 @@ struct pkt
 };
 
 // *******************************************************************************
-// Começo do código modificado
+// *******************************************************************************
+// ************ Começo do código modificado
+// *******************************************************************************
 // *******************************************************************************
 
-/*  Janela de envio, indicando o pacote a ser enviado e o próximo a ser enviado */
+// Janela de envio, indicando o pacote a ser enviado e o próximo a ser enviado */
 struct window
 {
-    struct pkt *packet;
-    struct window *next;
+    struct pkt* packet;
+    struct window* next;
 };
 
+// Auxiliares para controle de janela de A e B
 struct window *A_baseWindow = NULL;    // Base de envio de A
 struct window *A_endWindow = NULL;     // Final de envio de A
 struct window *B_baseWindow = NULL;    // Base de envio de B
 struct window *B_endWindow = NULL;     // Final de envio de B
 
-// Último ACK recebido
+// Último ACK recebido de A e B
 struct pkt *A_last_ack = NULL;
 struct pkt *B_last_ack = NULL;
 
@@ -92,32 +95,6 @@ int get_next_seqnum(struct window *start)
     }
 
     return seqnum;
-}
-
-// Retorna o tamanho da janela (em pacotes)
-int windowlen(int AorB)
-{
-    struct window *start, *end;
-    int ret = 0;
-
-    if (AorB == A)
-    {
-        start = A_baseWindow;
-        end = A_endWindow;
-    }
-    else if (AorB == B)
-    {
-        start = B_baseWindow;
-        end = B_endWindow;
-    }
-
-    // Conta a quantidade de pacotes entre o começo e o final
-    while (start != NULL && start->packet->seqnum <= end->packet->seqnum)
-    {
-        ret++;
-        start = start->next;
-    }
-    return ret;
 }
 
 // Calcula o checksum do pacote
@@ -197,8 +174,18 @@ void A_output(struct msg message)
         A_endWindow->next = newElement;
     }
 
+    // Conta a quantidade de pacotes entre o começo e o final
+    struct window *start = A_baseWindow,
+                  *end = A_endWindow;
+    int packets = 0;
+    while (start != NULL && start->packet->seqnum <= end->packet->seqnum)
+    {
+        packets++;
+        start = start->next;
+    }
+
     // Verifica se é possível enviar mais pacotes
-    while (windowlen(A) <= WINDOWSIZE)
+    while (packets <= WINDOWSIZE)
     {
         if (A_endWindow != NULL && A_endWindow->next != NULL)
         {
@@ -340,6 +327,12 @@ void B_init(void)
     B_endWindow = NULL;
     B_last_ack = NULL;
 }
+
+// *******************************************************************************
+// *******************************************************************************
+// ************ Final do código modificado
+// *******************************************************************************
+// *******************************************************************************
 
 /*****************************************************************
 ***************** NETWORK EMULATION CODE STARTS BELOW ***********
