@@ -133,38 +133,8 @@ void A_input(struct pkt packet)
 
 	int local_checksum = calc_checksum(&packet);
 
-	// Verifica checksum
-	if (local_checksum == packet.checksum) // Checksum válido
-	{
-		if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Verifica se é um ACK
-		{
-			printf("(ACK)\n");
-
-			// Se for um ACK do último pacote
-			if (packet.acknum == last_pkt->seqnum)
-			{
-				last_ack = &packet;
-				stoptimer(A);
-			}
-			// Se não, o ACK é ignorado
-		}
-		else if (strncmp(packet.payload, NACK, strlen(ACK)) == 0) // Se for um NACK
-		{
-			printf("(NACK)\n");
-
-			// Reenvia último pacote
-			send_pkt(A, last_pkt);
-		}
-		else
-		{
-			printf("(MSG)\n");
-
-			// Se não for ACK/NACK, envia o payload para a camada de cima
-			stoptimer(A);
-			tolayer5(A, packet.payload);
-		}
-	}
-	else // Checksum inválido
+	// Verifica o checksum
+	if (local_checksum != packet.checksum)
 	{
 		printf("\n[A] Checksum inválido (%d != %d)\n", local_checksum, packet.checksum);
 
@@ -177,8 +147,39 @@ void A_input(struct pkt packet)
 		tolayer3(A, *nack_pkt);
 
 		// Reseta o timer
+		// stoptimer(A);
+		// starttimer(A, TIMEOUT);
+		return;
+	}
+
+	// Checksum é valido aqui
+
+	if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Verifica se é um ACK
+	{
+		printf("(ACK)\n");
+
+		// Se for um ACK do último pacote
+		if (packet.acknum == last_pkt->seqnum)
+		{
+			last_ack = &packet;
+			stoptimer(A);
+		}
+		// Se não, o ACK é ignorado
+	}
+	else if (strncmp(packet.payload, NACK, strlen(ACK)) == 0) // Se for um NACK
+	{
+		printf("(NACK)\n");
+
+		// Reenvia último pacote
+		send_pkt(A, last_pkt);
+	}
+	else
+	{
+		printf("(MSG)\n");
+
+		// Se não for ACK/NACK, envia o payload para a camada de cima
 		stoptimer(A);
-		starttimer(A, TIMEOUT);
+		tolayer5(A, packet.payload);
 	}
 }
 
@@ -205,6 +206,27 @@ void A_init(void)
 void B_input(struct pkt packet)
 {
 	printf("[B] Pacote recebido (MSG).\n");
+
+	int local_checksum = calc_checksum(&packet);
+
+	// Verifica o checksum
+	if (local_checksum != packet.checksum)
+	{
+		printf("\n[B] Checksum inválido (%d != %d)\n", local_checksum, packet.checksum);
+
+		// Envia NACK
+		char msg[MSGSIZE] = "NACK";
+		int seqnum = packet.seqnum;
+		struct pkt *nack_pkt = make_pkt(seqnum, msg);
+		nack_pkt->acknum = 0;
+		nack_pkt->checksum = calc_checksum(nack_pkt);
+		tolayer3(B, *nack_pkt);
+
+		// Reseta o timer
+		// stoptimer(A);
+		// starttimer(A, TIMEOUT);
+		return;
+	}
 
 	// Envia ACK
 	char msg[MSGSIZE] = "ACK";

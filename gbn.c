@@ -177,35 +177,34 @@ void A_input(struct pkt packet)
 	int local_checksum = calc_checksum(&packet);
 
 	// Verifica o checksum
-	if (local_checksum == packet.checksum) // Checksum válido
+	if (local_checksum != packet.checksum)
+		return; // pacote é ignorado, timeout do outro lado irá disparar
+
+	if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK
 	{
-		if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK
-		{
-			printf("(ACK)\n");
+		printf("(ACK)\n");
 
-			if (packet.acknum <= A_endWindow->packet->seqnum) // Verifica se o ACKNUM é válido
-			{
-				// Ajusta a base de envio da janela para o próximo pacote
-				A_last_ack = &packet;
-				A_baseWindow = A_baseWindow->next;
-				stoptimer(A);
-			}
-			else return;
-			// Se o ACKNUM não for válido, é ignorado e o timeout vai disparar
-		}
-		else // Se não for um ACK
+		if (packet.acknum <= A_endWindow->packet->seqnum) // Verifica se o ACKNUM é válido
 		{
-			printf("(MSG)\n");
-
-			// Envia mensagem para a camada de cima...
+			// Ajusta a base de envio da janela para o próximo pacote
+			A_last_ack = &packet;
+			A_baseWindow = A_baseWindow->next;
 			stoptimer(A);
-			tolayer5(A, packet.payload);
 		}
-
-		// Ajusta o próximo seqnum esperado
-		A_expect_seqnum = packet.seqnum + 1;
+		else return;
+		// Se o ACKNUM não for válido, é ignorado e o timeout vai disparar
 	}
-	// Se o checksum for inválido, é ignorado e o timeout vai disparar
+	else // Se não for um ACK
+	{
+		printf("(MSG)\n");
+
+		// Envia mensagem para a camada de cima...
+		stoptimer(A);
+		tolayer5(A, packet.payload);
+	}
+
+	// Ajusta o próximo seqnum esperado
+	A_expect_seqnum = packet.seqnum + 1;
 }
 
 // Timeout de A
