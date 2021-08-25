@@ -83,18 +83,19 @@ int A_next_seqnum = 0;
 int B_next_seqnum = 0;
 
 // Calcula o checksum do pacote
-int calc_checksum(struct pkt *tgt_pkt)
+int calc_checksum(struct pkt *packet)
 {
 	int checksum = 0;
-	checksum += tgt_pkt->seqnum;
-	checksum += tgt_pkt->acknum;
+	checksum += packet->seqnum;
+	checksum += packet->acknum;
 	for (int i = 0; i < MSGSIZE; i++)
-		checksum += tgt_pkt->payload[i];
+		checksum += packet->payload[i];
+
 	return checksum;
 }
 
 // Cria um novo pacote com base num seqnum e um payload
-struct pkt *make_pkt(int seqnum, char data[])
+struct pkt *build_packet(int seqnum, char data[])
 {
 	struct pkt *packet = (struct pkt *)malloc(sizeof(struct pkt));
 	packet->seqnum = seqnum;
@@ -113,24 +114,25 @@ struct pkt *make_pkt(int seqnum, char data[])
 void send_ack(int AorB, struct pkt *packet)
 {
 	char msg[MSGSIZE] = "ACK";
-	struct pkt *packet_ack = make_pkt(packet->seqnum, msg);
-	packet_ack->acknum = packet->seqnum;
+	struct pkt *ack_packet = build_packet(packet->seqnum, msg);
+	ack_packet->acknum = packet->seqnum;
 
-	// Recalcula checksum com novos dados
-	packet_ack->checksum = calc_checksum(packet_ack);
+	// Recalcula checksum com novos dados do ACKNUM
+	ack_packet->checksum = calc_checksum(ack_packet);
 
 	// Envia
-	tolayer3(AorB, *packet_ack);
+	tolayer3(AorB, *ack_packet);
 }
 
 // Envia um pacote de AorB para o outro lado, e cria um timeout
-void send_pkt(int AorB, struct pkt *pkt_to_send)
+void send_packet(int AorB, struct pkt *packet)
 {
 	if (AorB == A)
 		printf("[A] Pacote enviado.\n");
 	else if (AorB == B)
 		printf("[B] Pacote enviado.\n");
-	tolayer3(AorB, *pkt_to_send);
+
+	tolayer3(AorB, *packet);
 	starttimer(AorB, TIMEOUT);
 }
 
@@ -140,7 +142,7 @@ void A_output(struct msg message)
 {
 	printf("[A] Mensagem recebida.\n");
 
-	struct pkt *packet = make_pkt(A_next_seqnum, message.data);
+	struct pkt *packet = build_packet(A_next_seqnum, message.data);
 	struct window *newElement = (struct window *)malloc(sizeof(struct window));
 	newElement->packet = packet;
 	newElement->next = NULL;
@@ -151,8 +153,7 @@ void A_output(struct msg message)
 	{
 		A_baseWindow = newElement;
 		A_endWindow = newElement;
-		send_pkt(A, packet);
-		return;
+		send_packet(A, packet);
 	}
 	else // Se não, adiciona na fila
 	{
@@ -172,7 +173,7 @@ void A_input(struct pkt packet)
 	printf("[A] Pacote recebido. ");
 
 	if (packet.seqnum != A_expect_seqnum)
-		return printf("(descartado)\n"); // Pacote é descartado, timeout de B irá disparar
+		return printf("(descartado)\n"); // Pacote é descartado (fora de ordem), timeout de B irá disparar
 
 	int local_checksum = calc_checksum(&packet);
 
@@ -199,7 +200,7 @@ void A_input(struct pkt packet)
 		printf("(MSG)\n");
 
 		// Envia mensagem para a camada de cima...
-		stoptimer(A);
+		send_ack(A, &packet);
 		tolayer5(A, packet.payload);
 	}
 
@@ -220,7 +221,7 @@ void A_timerinterrupt(void)
 		current_window = A_baseWindow;
 		while (current_window != NULL)
 		{
-			send_pkt(A, current_window->packet);
+			send_packet(A, current_window->packet);
 			current_window = current_window->next;
 		}
 	}
@@ -247,39 +248,38 @@ void B_input(struct pkt packet)
 	printf("[B] Pacote recebido. ");
 
 	if (packet.seqnum != B_expect_seqnum)
-		return printf("(descartado)\n"); // Pacote é descartado, timeout de A irá disparar
+		return printf("(descartado)\n"); // Pacote é descartado (fora de ordem), timeout de A irá disparar
 
 	// Verifica checksum do pacote
 	int local_checksum = calc_checksum(&packet);
 
-	// Verifica o checksum
-	if (local_checksum == packet.checksum) // Checksum válido
+	if (local_checksum != packet.checksum)
+		return; // pacote é ignorado, timeout do outro lado irá disparar
+
+	if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK (não usado aqui)
 	{
-		if (strncmp(packet.payload, ACK, strlen(ACK)) == 0) // Pacote é um ACK (não usado aqui)
+		printf("(ACK)\n");
+
+		if (packet.acknum <= B_endWindow->packet->seqnum) // Verifica se o ACKNUM é válido
 		{
-			printf("(ACK)\n");
-
-			if (packet.acknum <= B_endWindow->packet->seqnum) // Verifica se o ACKNUM é válido
-			{
-				// Ajuda a base de envio da janela para o próximo pacote
-				B_last_ack = &packet;
-				B_baseWindow = B_baseWindow->next;
-			}
-			else return;
-			// Se o ACKNUM não for válido, é ignorado
+			// Ajuda a base de envio da janela para o próximo pacote
+			B_last_ack = &packet;
+			B_baseWindow = B_baseWindow->next;
 		}
-		else // Se não for um ACK
-		{
-			printf("(MSG)\n");
-
-			// Envia mensagem para a camada de cima e envia um ACK para outro lado...
-			send_ack(B, &packet);
-			tolayer5(B, packet.payload);
-		}
-
-		// Ajusta o próximo seqnum esperado
-		B_expect_seqnum = packet.seqnum + 1;
+		else return;
+		// Se o ACKNUM não for válido, é ignorado
 	}
+	else // Se não for um ACK
+	{
+		printf("(MSG)\n");
+
+		// Envia mensagem para a camada de cima e envia um ACK para outro lado...
+		send_ack(B, &packet);
+		tolayer5(B, packet.payload);
+	}
+
+	// Ajusta o próximo seqnum esperado
+	B_expect_seqnum = packet.seqnum + 1;
 }
 
 // Timeout de B (não usado)

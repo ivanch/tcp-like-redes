@@ -58,51 +58,47 @@ struct pkt
 // *******************************************************************************
 // *******************************************************************************
 
-// Let's store last packet sent so we can resend it later
-struct pkt *last_pkt;
-struct pkt *last_ack;
+// Último pacote e ack enviado
+struct pkt *last_pkt; // Lado A
+struct pkt *last_ack; // Lado B
 
-int calc_checksum(struct pkt *tgt_pkt)
+// Calcula o checksum do pacote
+int calc_checksum(struct pkt *packet)
 {
 	int checksum = 0;
-	checksum += tgt_pkt->seqnum;
-	checksum += tgt_pkt->acknum;
-	for (int i = 0; i < sizeof(tgt_pkt->payload) / sizeof(char); i++)
-		checksum += tgt_pkt->payload[i];
+	checksum += packet->seqnum;
+	checksum += packet->acknum;
+	for (int i = 0; i < MSGSIZE; i++)
+		checksum += packet->payload[i];
+
 	return checksum;
 }
 
-struct pkt *make_pkt(int seqnum, char data[])
+// Cria um novo pacote com base num seqnum e um payload
+struct pkt *build_packet(int seqnum, char data[])
 {
-	// make_pkt: Returns a pointer to a newly initialized packet
-	struct pkt *gen_pkt = (struct pkt *)malloc(sizeof(struct pkt));
-	gen_pkt->seqnum = seqnum;
-	gen_pkt->acknum = 0;
+	struct pkt *packet = (struct pkt *)malloc(sizeof(struct pkt));
+	packet->seqnum = seqnum;
+	packet->acknum = 0;
+
+	// Copia o payload
 	for (int i = 0; i < MSGSIZE; i++)
-	{
-		gen_pkt->payload[i] = data[i];
-	}
-	gen_pkt->checksum = calc_checksum(gen_pkt);
-	return gen_pkt;
+		packet->payload[i] = data[i];
+
+	// calcula checksum
+	packet->checksum = calc_checksum(packet);
+	return packet;
 }
 
-// void send_ack(int caller, struct pkt *pkt_to_ack)
-// {
-//     char msg[MSGSIZE] = "ACK";
-//     int seqnum = pkt_to_ack->seqnum;
-//     struct pkt *ack_pkt = make_pkt(seqnum, msg);
-//     ack_pkt->acknum = pkt_to_ack->seqnum;
-//     ack_pkt->checksum = calc_checksum(ack_pkt);
-//     tolayer3(caller, *ack_pkt);
-// }
-
-void send_pkt(int AorB, struct pkt *pkt_to_send)
+// Envia um pacote de A ou B para o outro lado
+void send_pkt(int AorB, struct pkt *packet)
 {
 	if (AorB == A)
 		printf("[A] Pacote enviado.\n");
 	else if (AorB == B)
 		printf("[B] Pacote enviado.\n");
-	tolayer3(AorB, *pkt_to_send);
+
+	tolayer3(AorB, *packet);
 	starttimer(AorB, TIMEOUT);
 }
 
@@ -110,14 +106,16 @@ void send_pkt(int AorB, struct pkt *pkt_to_send)
 void A_output(struct msg message)
 {
 	printf("[A] Mensagem recebida.\n");
-	struct pkt *out_pkt;
-	int seqnum;
+	struct pkt *packet;
+	int seqnum = 0;
 
-	seqnum = (last_pkt && last_pkt->seqnum < 1) ? 1 : 0;
-	out_pkt = make_pkt(seqnum, message.data);
-	last_pkt = out_pkt;
+	if (last_pkt != NULL && last_pkt->seqnum == 0)
+		seqnum = 1;
 
-	send_pkt(A, out_pkt);
+	packet = build_packet(seqnum, message.data);
+	send_pkt(A, packet);
+
+	last_pkt = packet;
 }
 
 // Não é usado no programa de bit-alternante
@@ -141,7 +139,7 @@ void A_input(struct pkt packet)
 		// Envia NACK
 		char msg[MSGSIZE] = "NACK";
 		int seqnum = packet.seqnum;
-		struct pkt *nack_pkt = make_pkt(seqnum, msg);
+		struct pkt *nack_pkt = build_packet(seqnum, msg);
 		nack_pkt->acknum = 0;
 		nack_pkt->checksum = calc_checksum(nack_pkt);
 		tolayer3(A, *nack_pkt);
@@ -166,7 +164,7 @@ void A_input(struct pkt packet)
 		}
 		// Se não, o ACK é ignorado
 	}
-	else if (strncmp(packet.payload, NACK, strlen(ACK)) == 0) // Se for um NACK
+	else if (strncmp(packet.payload, NACK, strlen(NACK)) == 0) // Se for um NACK
 	{
 		printf("(NACK)\n");
 
@@ -178,7 +176,6 @@ void A_input(struct pkt packet)
 		printf("(MSG)\n");
 
 		// Se não for ACK/NACK, envia o payload para a camada de cima
-		stoptimer(A);
 		tolayer5(A, packet.payload);
 	}
 }
@@ -186,7 +183,7 @@ void A_input(struct pkt packet)
 /* Timeout de A */
 void A_timerinterrupt(void)
 {
-	if (last_ack && (last_ack->acknum < last_pkt->seqnum))
+	if (last_ack != NULL && (last_ack->acknum < last_pkt->seqnum))
 	{
 		printf("[A] ACK/NACK não recebido, reenviando pacote...\n");
 		send_pkt(A, last_pkt);
@@ -217,7 +214,7 @@ void B_input(struct pkt packet)
 		// Envia NACK
 		char msg[MSGSIZE] = "NACK";
 		int seqnum = packet.seqnum;
-		struct pkt *nack_pkt = make_pkt(seqnum, msg);
+		struct pkt *nack_pkt = build_packet(seqnum, msg);
 		nack_pkt->acknum = 0;
 		nack_pkt->checksum = calc_checksum(nack_pkt);
 		tolayer3(B, *nack_pkt);
@@ -231,7 +228,7 @@ void B_input(struct pkt packet)
 	// Envia ACK
 	char msg[MSGSIZE] = "ACK";
 	int seqnum = packet.seqnum;
-	struct pkt *ack_pkt = make_pkt(seqnum, msg);
+	struct pkt *ack_pkt = build_packet(seqnum, msg);
 	ack_pkt->acknum = seqnum;
 	ack_pkt->checksum = calc_checksum(ack_pkt);
 	tolayer3(B, *ack_pkt);
